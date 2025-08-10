@@ -1,104 +1,200 @@
-Java-P2P: A Peer-to-Peer File Sharer
----------------
-A console-based, decentralized file-sharing application built with Java. Each instance of the application acts as both a client and a server, allowing users to search for and download files directly from other peers on the network without a central server.
+# 📡 Java-P2P: A Peer-to-Peer File Sharer
 
-This project is a practical example of network programming in Java, demonstrating multithreading for concurrent connections and socket programming for direct peer-to-peer communication.
+A **console-based**, decentralized file-sharing application written in **Java**.  
+Each instance of the application acts as both a **client** and a **server**, enabling users to search and download files directly from other peers without a central server.
 
-Features
-Decentralized Architecture: No central server is required; peers connect directly to each other.
+---
 
-Concurrent Handling: Uses a thread pool to manage multiple incoming connections simultaneously.
+## 📖 Table of Contents
 
-File Discovery: Search for files on a connected peer's shared directory.
+1. [Overview](#📜-overview)
+2. [Features](#✨-features)
+3. [Key Terms](#📚-key-terms)
+4. [Prerequisites](#💻-prerequisites)
+5. [Installation](#⚙️-installation)
+6. [Usage Guide](#🖥️-usage-guide)
+7. [Example Workflow](#🛠-example-workflow)
+7. [How It Works](#🔧-how-it-works)
+9. [Project Structure](#📂-project-structure)
+10. [Limitations](#⚠️-limitations)
+11. [License](#📜-license)
 
-Direct File Transfer: Download files directly from a peer using a binary data stream.
+---
 
-Simple CLI: An interactive command-line interface for connecting to peers and managing file transfers.
+## 📜 Overview
 
-Prerequisites
-To compile and run this project, you will need to have a Java Development Kit (JDK) version 11 or higher installed on your system.
+This project demonstrates **network programming in Java** by building a fully functional peer-to-peer (P2P) file sharing system.  
+Unlike centralized file-sharing services, there is **no single server** — every peer can directly connect to others, search for available files, and download them.
 
-Getting Started
-Follow these steps to get the P2P application running and test a file transfer between two peers.
+The program uses:
 
-1. Clone or Download the Project
-First, get the project files onto your local machine. If you have Git, you can clone the repository.
+- **Multithreading** to handle multiple simultaneous connections.
+- **Socket programming** for TCP-based communication between peers.
+- **Binary streaming** to send files reliably.
 
-2. Set Up the File Structure
-The application requires a specific directory structure to function correctly.
+---
 
-Create a folder named shared. This is where you will place files you want to share with other peers.
+## ✨ Features
 
-Create a text file inside the shared folder (e.g., hello.txt) and add some content to it.
+- **Decentralized Architecture** — No central server required; peers communicate directly.
+- **Dual Role Peers** — Each instance acts as both client and server.
+- **Multithreaded Connection Handling** — Thread pool for managing concurrent connections.
+- **File Search** — Search shared directories on connected peers.
+- **Direct File Transfer** — Download files over TCP using a binary data stream.
+- **Simple CLI Interface** — Use text commands to control the peer and manage transfers.
+- **Automatic Folder Setup** — Creates required `shared/` and `downloads/` folders if they don't exist.
 
-Create an empty folder named downloads. This is where files you download from other peers will be saved.
+---
 
-Your directory should look like this:
+## 📚 Key Terms
 
-.
-├── Peer.java
-├── shared/
-│   └── hello.txt
-└── downloads/
+- **Peer**: A node in the network that can act as both client and server.
+- **P2P (Peer-to-Peer)**: A network where each participant communicates directly without a central server.
+- **Socket**: An endpoint for sending or receiving data across a network connection.
+- **TCP (Transmission Control Protocol)**: A communication protocol that ensures reliable, ordered delivery of data.
+- **Thread Pool**: A set of pre-instantiated threads ready to handle tasks, improving concurrency and performance.
+- **Binary Stream**: A method of transmitting data as raw bytes, allowing accurate file transfer.
 
-3. Compile the Application
-Open your terminal in the root directory of the project and compile the Peer.java file.
+---
 
+## 💻 Prerequisites
+
+To compile and run the project, you will need:
+
+- **Java Development Kit (JDK)** version 11 or higher.
+- Basic understanding of command-line operations.
+- (For cross-computer usage) Both systems must be on the same network or have port forwarding enabled.
+
+---
+
+## ⚙️ Installation
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/<your-username>/java-p2p-file-sharer.git
+cd java-p2p-file-sharer
+```
+
+### 2. Create Required Folders
+
+```bash
+mkdir shared downloads
+```
+
+### 3. Add a Test File
+
+Place a file inside `shared/`, for example:
+
+```bash
+echo "Hello, P2P World!" > shared/hello.txt
+```
+
+### 4. Compile the Application
+
+```bash
 javac Peer.java
+```
 
-4. Run Two Peer Instances
-To simulate a P2P network, you need to run at least two instances of the application. Open two separate terminal windows.
+---
 
-In Terminal 1 (Peer 1):
-Run the first peer on port 9001.
+## 🖥️ Usage Guide
 
+### Start a Peer
+
+Run the peer with:
+
+```bash
+java Peer <port>
+```
+
+Example:
+
+```bash
 java Peer 9001
+```
 
-In Terminal 2 (Peer 2):
-Run the second peer on a different port, for example, 9002.
+### CLI Commands
 
+| Command | Description | Example |
+|---------|-------------|---------|
+| `connect <host> <port>` | Connect to another peer. | `connect 192.168.1.10 9001` |
+| `search <keyword>` | Search for files containing `<keyword>` in their name. | `search hello` |
+| `download <filename>` | Download a file from the connected peer. | `download hello.txt` |
+| `exit` | Exit the application. | `exit` |
+
+---
+
+## 🛠 Example Workflow
+
+### Running Two Peers Locally
+
+**Terminal 1:**
+
+```bash
+java Peer 9001
+```
+
+**Terminal 2:**
+
+```bash
 java Peer 9002
+```
 
-5. Test the File Sharing
-Now you can use the command-line interface to connect the peers and transfer a file.
+**In Peer 2 CLI:**
 
-In Peer 2's terminal, connect to Peer 1:
+```bash
+connect localhost 9001
+search hello
+download hello.txt
+```
 
-> connect localhost 9001
+The file `hello.txt` from Peer 1's `shared/` folder will appear in Peer 2's `downloads/` folder.
 
-Once connected, still in Peer 2's terminal, search for the file you created:
+---
 
-[localhost:9001]> search hello
+## 🔧 How It Works
 
-You should see hello.txt listed in the search results.
+### Dual Components
 
-Finally, download the file:
+- **Server Thread**: Listens for incoming connections and responds to search or download requests.
+- **Client CLI**: Accepts user commands and communicates with other peers.
 
-[localhost:9001]> download hello.txt
+### Connecting to a Peer
 
-The file will be downloaded and saved to your downloads folder. You can check the folder to verify that the transfer was successful.
+The `connect` command opens a TCP socket to another peer's listening port.
 
-How It Works
-Dual Nature: Each Peer instance starts two main components:
+### Searching for Files
 
-A server thread that continuously listens for incoming connections from other peers.
+1. The client sends `search <keyword>` to the server.
+2. The server searches its `shared/` folder and returns matching filenames.
 
-A client CLI that allows the user to issue commands.
+### Downloading a File
 
-Connection: When a user types connect <host> <port>, the client component establishes a socket connection to another peer's server.
+1. The client sends `download <filename>`.
+2. The server responds with:
+   - File size (long integer).
+   - File content as binary stream.
+3. The client reads exactly that many bytes and saves the file.
 
-Communication: Once connected, commands like search and download are sent as plain text over the socket.
+### Multithreading
 
-The receiving peer's server thread reads the command and calls the appropriate handler (handleSearch or handleDownload).
+Each incoming connection is handled in its own thread, allowing multiple downloads or searches simultaneously.
 
-File Transfer:
+---
 
-When a download command is received, the serving peer first sends the total file size (as a long).
+## 📂 Project Structure
 
-It then reads the file in chunks and writes the binary data directly to the socket's output stream.
+```
+.
+├── Peer.java          # Main application code
+├── shared/            # Folder containing files available to share
+│   └── hello.txt
+└── downloads/         # Folder where downloaded files will be saved
+```
 
-The downloading peer reads the file size, then reads from the input stream until the specified number of bytes has been received, writing the data to a new file in its downloads folder.
+---
 
-License
------------
-This project is licensed under the MIT License - see the LICENSE.md file for details.
+## 📜 License
+
+This project is licensed under the MIT License — see the `LICENSE.md` file for details.
