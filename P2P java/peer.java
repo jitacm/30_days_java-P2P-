@@ -12,16 +12,16 @@ public class Peer {
     private int port;
     private ExecutorService threadPool = Executors.newFixedThreadPool(10);
     private List<ConnectionHandler> connections = new ArrayList<>();
+    private PeerDiscoveryService discoveryService;
 
     public Peer(int port) {
         this.port = port;
+        this.discoveryService = new PeerDiscoveryService(port);
     }
 
     public void start() {
-        // Start the server thread
+        discoveryService.start();
         new Thread(this::startServer).start();
-
-        // Start CLI for client commands
         startCLI();
     }
 
@@ -63,19 +63,23 @@ public class Peer {
         File folder = new File(SHARED_DIR);
         PrintWriter out = new PrintWriter(outStream, true);
 
-        for (File file : Objects.requireNonNull(folder.listFiles())) {
-            if (file.getName().toLowerCase().contains(keyword)) {
-                out.println(file.getName());
+        File[] files = folder.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                if (file.getName().toLowerCase().contains(keyword)) {
+                    out.println(file.getName());
+                }
             }
         }
         out.println("END");
     }
 
-    // Send a file to the requesting peer
+    // Send a file to the requesting peer, supporting download resume
     private void handleDownload(String command, OutputStream outStream) throws IOException {
         String[] parts = command.split(" ");
-        if (parts.length < 2) return;
+        if (parts.length < 3) return;
         String fileName = parts[1];
+        long offset = Long.parseLong(parts[2]);
         File file = new File(SHARED_DIR + "/" + fileName);
 
         DataOutputStream dataOut = new DataOutputStream(outStream);
@@ -86,9 +90,16 @@ public class Peer {
         }
 
         long fileSize = file.length();
-        dataOut.writeLong(fileSize);
+        if (offset >= fileSize) {
+            // File already fully downloaded, or offset is invalid
+            dataOut.writeLong(0); // Tell client to not expect any more bytes
+            return;
+        }
 
-        try (FileInputStream fileIn = new FileInputStream(file)) {
+        dataOut.writeLong(fileSize - offset);
+
+        try (RandomAccessFile fileIn = new RandomAccessFile(file, "r")) {
+            fileIn.seek(offset); // Start reading from the specified offset
             byte[] buffer = new byte[BUFFER_SIZE];
             int bytesRead;
             while ((bytesRead = fileIn.read(buffer)) != -1) {
@@ -114,28 +125,36 @@ public class Peer {
                         continue;
                     }
                     String host = parts[1];
-                    int port = Integer.parseInt(parts[2]);
-                    connections.add(new ConnectionHandler(host, port));
-                    System.out.println("Connected to " + host + ":" + port);
+                    int newPort = Integer.parseInt(parts[2]);
+                    connections.add(new ConnectionHandler(host, newPort));
+                    System.out.println("Connected to " + host + ":" + newPort);
                     break;
-
+                case "discover":
+                    System.out.println("Discovered peers:");
+                    Set<String> peers = discoveryService.getDiscoveredPeers();
+                    if (peers.isEmpty()) {
+                        System.out.println("No peers found. Waiting for broadcasts...");
+                    } else {
+                        peers.forEach(System.out::println);
+                    }
+                    break;
                 case "search":
                 case "download":
                     if (connections.isEmpty()) {
-                        System.out.println("No active connections.");
+                        System.out.println("No active connections. Use 'discover' or 'connect' first.");
                         continue;
                     }
                     for (ConnectionHandler conn : connections) {
                         conn.sendCommand(command);
                     }
                     break;
-
                 case "exit":
                     System.out.println("Exiting...");
+                    discoveryService.shutdown();
                     scanner.close();
+                    threadPool.shutdownNow();
                     System.exit(0);
                     break;
-
                 default:
                     System.out.println("Unknown command.");
             }
@@ -155,44 +174,55 @@ public class Peer {
         public void sendCommand(String command) {
             try (
                 Socket socket = new Socket(host, port);
-                PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
                 InputStream inStream = socket.getInputStream();
-                BufferedReader in = new BufferedReader(new InputStreamReader(inStream));
             ) {
-                out.println(command);
-
+                PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
+                
                 if (command.startsWith("search")) {
+                    out.println(command);
+                    BufferedReader in = new BufferedReader(new InputStreamReader(inStream));
                     System.out.println("[" + host + ":" + port + "] Search results:");
                     String line;
                     while ((line = in.readLine()) != null && !line.equals("END")) {
                         System.out.println(" - " + line);
                     }
-
                 } else if (command.startsWith("download")) {
                     String[] parts = command.split(" ");
                     if (parts.length < 2) return;
                     String fileName = parts[1];
                     File outFile = new File(DOWNLOAD_DIR + "/" + fileName);
 
+                    long existingSize = 0;
+                    if (outFile.exists()) {
+                        existingSize = outFile.length();
+                        System.out.println("Resuming download of " + fileName + " from " + existingSize + " bytes.");
+                    }
+                    
+                    out.println(command + " " + existingSize);
+
                     DataInputStream dataIn = new DataInputStream(inStream);
-                    long fileSize = dataIn.readLong();
-                    if (fileSize == -1) {
+                    long remainingSize = dataIn.readLong();
+                    if (remainingSize == -1) {
                         System.out.println("File not found on peer.");
                         return;
                     }
+                    if (remainingSize == 0) {
+                        System.out.println("File already fully downloaded: " + fileName);
+                        return;
+                    }
 
-                    try (FileOutputStream fileOut = new FileOutputStream(outFile)) {
+                    try (RandomAccessFile fileOut = new RandomAccessFile(outFile, "rw")) {
+                        fileOut.seek(existingSize); // Start writing from the end of the existing file
                         byte[] buffer = new byte[BUFFER_SIZE];
                         long totalRead = 0;
                         int bytesRead;
-                        while (totalRead < fileSize && (bytesRead = dataIn.read(buffer)) != -1) {
+                        while (totalRead < remainingSize && (bytesRead = dataIn.read(buffer)) != -1) {
                             fileOut.write(buffer, 0, bytesRead);
                             totalRead += bytesRead;
                         }
                         System.out.println("File downloaded: " + fileName);
                     }
                 }
-
             } catch (IOException e) {
                 System.err.println("Connection to " + host + ":" + port + " failed: " + e.getMessage());
             }
@@ -205,8 +235,6 @@ public class Peer {
             System.out.println("Usage: java Peer <port>");
             return;
         }
-
-        // Ensure directories exist
         new File(SHARED_DIR).mkdirs();
         new File(DOWNLOAD_DIR).mkdirs();
 
