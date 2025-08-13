@@ -1,5 +1,7 @@
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.util.List;
@@ -11,7 +13,9 @@ public class PeerGUI extends JFrame implements Peer.PeerListener {
     private JTextField hostField;
     private JTextField portField;
     private JTextField searchField;
-    private JTextField downloadField;
+    private DefaultListModel<String> searchResultsModel;
+    private JList<String> searchResultsList;
+    private JProgressBar progressBar;
 
     public PeerGUI(Peer peer, int port) {
         this.peer = peer;
@@ -69,29 +73,41 @@ public class PeerGUI extends JFrame implements Peer.PeerListener {
         searchPanel.add(searchField);
         searchPanel.add(searchButton);
         controlPanel.add(searchPanel);
-
-        // Download Section
-        JPanel downloadPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        downloadField = new JTextField(20);
-        JButton downloadButton = new JButton("Download");
-        downloadButton.addActionListener(e -> {
-            String fileName = downloadField.getText();
-            if (!fileName.isEmpty()) {
-                peer.download(fileName);
-            }
-        });
-        downloadPanel.add(new JLabel("Download File: "));
-        downloadPanel.add(downloadField);
-        downloadPanel.add(downloadButton);
-        controlPanel.add(downloadPanel);
-
+        
         add(controlPanel, BorderLayout.NORTH);
 
-        // Log Area for Status Messages and Results
+        // Center panel for search results and log
+        JPanel centerPanel = new JPanel(new GridLayout(1, 2, 10, 10));
+        
+        // Search Results List
+        searchResultsModel = new DefaultListModel<>();
+        searchResultsList = new JList<>(searchResultsModel);
+        searchResultsList.setBorder(BorderFactory.createTitledBorder("Search Results (Double click to download)"));
+        searchResultsList.addMouseListener(new MouseAdapter() {
+            public void mouseClicked(MouseEvent evt) {
+                if (evt.getClickCount() == 2) {
+                    String selectedFile = searchResultsList.getSelectedValue();
+                    if (selectedFile != null) {
+                        peer.download(selectedFile);
+                    }
+                }
+            }
+        });
+        centerPanel.add(new JScrollPane(searchResultsList));
+
+        // Log Area for Status Messages
         logArea = new JTextArea();
         logArea.setEditable(false);
-        JScrollPane scrollPane = new JScrollPane(logArea);
-        add(scrollPane, BorderLayout.CENTER);
+        logArea.setBorder(BorderFactory.createTitledBorder("Activity Log"));
+        centerPanel.add(new JScrollPane(logArea));
+
+        add(centerPanel, BorderLayout.CENTER);
+
+        // Progress Bar at the bottom
+        progressBar = new JProgressBar(0, 100);
+        progressBar.setStringPainted(true);
+        progressBar.setBorder(BorderFactory.createEmptyBorder(5, 10, 5, 10));
+        add(progressBar, BorderLayout.SOUTH);
 
         // Handle window closing gracefully
         addWindowListener(new WindowAdapter() {
@@ -111,14 +127,25 @@ public class PeerGUI extends JFrame implements Peer.PeerListener {
     @Override
     public void onSearchResults(String host, int port, List<String> results) {
         SwingUtilities.invokeLater(() -> {
-            logArea.append("--- Search results from " + host + ":" + port + " ---\n");
+            // Clear existing results and add new ones
+            searchResultsModel.clear();
             if (results.isEmpty()) {
-                logArea.append("No files found.\n");
+                onMessageReceived("No files found on " + host + ":" + port);
             } else {
+                onMessageReceived("--- Search results from " + host + ":" + port + " ---");
                 for (String file : results) {
-                    logArea.append("  - " + file + "\n");
+                    searchResultsModel.addElement(file);
                 }
             }
+        });
+    }
+    
+    @Override
+    public void onDownloadProgress(String fileName, long totalBytes, long downloadedBytes) {
+        SwingUtilities.invokeLater(() -> {
+            int progress = (int) ((downloadedBytes * 100) / totalBytes);
+            progressBar.setValue(progress);
+            progressBar.setString(fileName + " " + progress + "%");
         });
     }
 
@@ -130,12 +157,12 @@ public class PeerGUI extends JFrame implements Peer.PeerListener {
 
         int port = Integer.parseInt(args[0]);
         Peer peer = new Peer(port);
-        SwingUtilities.invokeLater(() -> new PeerGUI(peer, port).setVisible(true));
+        SwingUtilities.invokeLater(() -> {
+            PeerGUI gui = new PeerGUI(peer, port);
+            peer.setPeerListener(gui);
+            gui.setVisible(true);
+        });
         
-        // Setup shutdown hook
         Runtime.getRuntime().addShutdownHook(new Thread(peer::shutdown));
     }
 }
-
-// PeerDiscoveryService is a new file that must be compiled with Peer.java and PeerGUI.java
-// For this example, we will assume it is available.

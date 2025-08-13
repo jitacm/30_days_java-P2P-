@@ -2,6 +2,7 @@ import java.io.*;
 import java.net.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.*;
@@ -13,6 +14,7 @@ public class Peer {
     public interface PeerListener {
         void onMessageReceived(String message);
         void onSearchResults(String host, int port, List<String> results);
+        void onDownloadProgress(String fileName, long totalBytes, long downloadedBytes);
     }
 
     private static final int BUFFER_SIZE = 4096;
@@ -28,9 +30,19 @@ public class Peer {
     public Peer(int port) {
         this.port = port;
         this.discoveryService = new PeerDiscoveryService(port);
-        // Ensure directories exist
-        new File(SHARED_DIR).mkdirs();
-        new File(DOWNLOAD_DIR).mkdirs();
+        // Use java.nio.file.Path for modern file operations
+        Path sharedDirPath = Paths.get(SHARED_DIR);
+        Path downloadDirPath = Paths.get(DOWNLOAD_DIR);
+        try {
+            if (Files.notExists(sharedDirPath)) {
+                Files.createDirectories(sharedDirPath);
+            }
+            if (Files.notExists(downloadDirPath)) {
+                Files.createDirectories(downloadDirPath);
+            }
+        } catch (IOException e) {
+            System.err.println("Error creating directories: " + e.getMessage());
+        }
     }
 
     public void setPeerListener(PeerListener listener) {
@@ -83,16 +95,13 @@ public class Peer {
         String[] parts = command.split(" ");
         if (parts.length < 2) return;
         String keyword = parts[1].toLowerCase();
-        File folder = new File(SHARED_DIR);
+        Path sharedPath = Paths.get(SHARED_DIR);
         PrintWriter out = new PrintWriter(outStream, true);
 
-        File[] files = folder.listFiles();
-        if (files != null) {
-            for (File file : files) {
-                if (file.getName().toLowerCase().contains(keyword)) {
-                    out.println(file.getName());
-                }
-            }
+        try (var stream = Files.list(sharedPath)) {
+            stream.filter(Files::isRegularFile)
+                  .filter(p -> p.getFileName().toString().toLowerCase().contains(keyword))
+                  .forEach(p -> out.println(p.getFileName().toString()));
         }
         out.println("END");
     }
@@ -103,20 +112,20 @@ public class Peer {
         if (parts.length < 3) return;
         String fileName = parts[1];
         long offset = Long.parseLong(parts[2]);
-        File file = new File(SHARED_DIR + "/" + fileName);
+        Path filePath = Paths.get(SHARED_DIR, fileName);
 
         DataOutputStream dataOut = new DataOutputStream(outStream);
 
-        if (!file.exists()) {
+        if (Files.notExists(filePath)) {
             dataOut.writeLong(-1);
             return;
         }
 
         try {
-            String checksum = getFileChecksum(file);
+            String checksum = getFileChecksum(filePath.toFile());
             dataOut.writeUTF(checksum);
 
-            long fileSize = file.length();
+            long fileSize = Files.size(filePath);
             if (offset >= fileSize) {
                 dataOut.writeLong(0);
                 return;
@@ -124,7 +133,8 @@ public class Peer {
 
             dataOut.writeLong(fileSize - offset);
 
-            try (RandomAccessFile fileIn = new RandomAccessFile(file, "r")) {
+            // Use try-with-resources for RandomAccessFile
+            try (RandomAccessFile fileIn = new RandomAccessFile(filePath.toFile(), "r")) {
                 fileIn.seek(offset);
                 byte[] buffer = new byte[BUFFER_SIZE];
                 int bytesRead;
@@ -169,7 +179,7 @@ public class Peer {
         String command = "search " + keyword;
         if (connections.isEmpty()) {
             if (listener != null) {
-                listener.onMessageReceived("No active connections. Use 'connect' first.");
+                listener.onMessageReceived("No active connections. Use 'connect' or 'discover' first.");
             }
             return;
         }
@@ -182,7 +192,7 @@ public class Peer {
         String command = "download " + fileName;
         if (connections.isEmpty()) {
             if (listener != null) {
-                listener.onMessageReceived("No active connections. Use 'connect' first.");
+                listener.onMessageReceived("No active connections. Use 'connect' or 'discover' first.");
             }
             return;
         }
@@ -222,11 +232,12 @@ public class Peer {
             try (
                 Socket socket = new Socket(host, port);
                 InputStream inStream = socket.getInputStream();
+                OutputStream outStream = socket.getOutputStream();
             ) {
-                PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
+                PrintWriter out = new PrintWriter(outStream, true);
                 
                 if (command.startsWith("search")) {
-                    out.println(command + " 0"); // Appending offset 0 for initial search
+                    out.println(command);
                     BufferedReader in = new BufferedReader(new InputStreamReader(inStream));
                     List<String> results = new ArrayList<>();
                     String line;
@@ -240,11 +251,11 @@ public class Peer {
                     String[] parts = command.split(" ");
                     if (parts.length < 2) return;
                     String fileName = parts[1];
-                    File outFile = new File(DOWNLOAD_DIR + "/" + fileName);
+                    Path downloadPath = Paths.get(DOWNLOAD_DIR, fileName);
 
                     long existingSize = 0;
-                    if (outFile.exists()) {
-                        existingSize = outFile.length();
+                    if (Files.exists(downloadPath)) {
+                        existingSize = Files.size(downloadPath);
                         if (listener != null) {
                             listener.onMessageReceived("Resuming download of " + fileName + " from " + existingSize + " bytes.");
                         }
@@ -269,18 +280,27 @@ public class Peer {
                         return;
                     }
 
-                    try (RandomAccessFile fileOut = new RandomAccessFile(outFile, "rw")) {
+                    try (RandomAccessFile fileOut = new RandomAccessFile(downloadPath.toFile(), "rw")) {
                         fileOut.seek(existingSize);
                         byte[] buffer = new byte[BUFFER_SIZE];
-                        long totalRead = 0;
+                        long totalRead = existingSize;
                         int bytesRead;
-                        while (totalRead < remainingSize && (bytesRead = dataIn.read(buffer)) != -1) {
+                        long bytesToRead = remainingSize;
+                        
+                        while (bytesToRead > 0 && (bytesRead = dataIn.read(buffer, 0, (int) Math.min(buffer.length, bytesToRead))) != -1) {
                             fileOut.write(buffer, 0, bytesRead);
                             totalRead += bytesRead;
+                            bytesToRead -= bytesRead;
+                            
+                            // Report progress to the GUI
+                            if (listener != null) {
+                                long totalFileSize = existingSize + remainingSize;
+                                listener.onDownloadProgress(fileName, totalFileSize, totalRead);
+                            }
                         }
                         
                         // Verify checksum after download
-                        String localChecksum = getFileChecksum(outFile);
+                        String localChecksum = getFileChecksum(downloadPath.toFile());
                         if (localChecksum.equals(remoteChecksum)) {
                             if (listener != null) {
                                 listener.onMessageReceived("File downloaded successfully: " + fileName);
@@ -315,12 +335,13 @@ public class Peer {
 
         int port = Integer.parseInt(args[0]);
         Peer peer = new Peer(port);
-        SwingUtilities.invokeLater(() -> new PeerGUI(peer, port).setVisible(true));
+        SwingUtilities.invokeLater(() -> {
+            PeerGUI gui = new PeerGUI(peer, port);
+            peer.setPeerListener(gui);
+            gui.setVisible(true);
+        });
         
         // Setup shutdown hook
         Runtime.getRuntime().addShutdownHook(new Thread(peer::shutdown));
     }
 }
-
-// PeerDiscoveryService is a new file that must be compiled with Peer.java
-// For this example, we will assume it is available.
