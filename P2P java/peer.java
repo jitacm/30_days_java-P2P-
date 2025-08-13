@@ -9,6 +9,12 @@ import java.util.concurrent.*;
 
 public class Peer {
 
+    // A nested interface to allow the Peer class to communicate back to the GUI
+    public interface PeerListener {
+        void onMessageReceived(String message);
+        void onSearchResults(String host, int port, List<String> results);
+    }
+
     private static final int BUFFER_SIZE = 4096;
     private static final String SHARED_DIR = "shared";
     private static final String DOWNLOAD_DIR = "downloads";
@@ -17,28 +23,39 @@ public class Peer {
     private ExecutorService threadPool = Executors.newFixedThreadPool(10);
     private List<ConnectionHandler> connections = new ArrayList<>();
     private PeerDiscoveryService discoveryService;
+    private PeerListener listener;
 
     public Peer(int port) {
         this.port = port;
         this.discoveryService = new PeerDiscoveryService(port);
+        // Ensure directories exist
+        new File(SHARED_DIR).mkdirs();
+        new File(DOWNLOAD_DIR).mkdirs();
+    }
+
+    public void setPeerListener(PeerListener listener) {
+        this.listener = listener;
     }
 
     public void start() {
         discoveryService.start();
         new Thread(this::startServer).start();
-        startCLI();
     }
-
+    
     // Server-side: Listen for incoming peer connections
     private void startServer() {
         try (ServerSocket serverSocket = new ServerSocket(port)) {
-            System.out.println("Listening for peers on port " + port + "...");
+            if (listener != null) {
+                listener.onMessageReceived("Listening for peers on port " + port + "...");
+            }
             while (true) {
                 Socket clientSocket = serverSocket.accept();
                 threadPool.execute(() -> handleClient(clientSocket));
             }
         } catch (IOException e) {
-            System.err.println("Server error: " + e.getMessage());
+            if (listener != null) {
+                listener.onMessageReceived("Server error: " + e.getMessage());
+            }
         }
     }
 
@@ -55,7 +72,9 @@ public class Peer {
                 handleDownload(command, outStream);
             }
         } catch (IOException e) {
-            System.err.println("Client handling error: " + e.getMessage());
+            if (listener != null) {
+                listener.onMessageReceived("Client handling error: " + e.getMessage());
+            }
         }
     }
 
@@ -94,7 +113,6 @@ public class Peer {
         }
 
         try {
-            // Calculate and send checksum
             String checksum = getFileChecksum(file);
             dataOut.writeUTF(checksum);
 
@@ -115,7 +133,9 @@ public class Peer {
                 }
             }
         } catch (NoSuchAlgorithmException e) {
-            System.err.println("Checksum algorithm not found: " + e.getMessage());
+            if (listener != null) {
+                listener.onMessageReceived("Checksum algorithm not found: " + e.getMessage());
+            }
             dataOut.writeLong(-1);
         }
     }
@@ -137,57 +157,55 @@ public class Peer {
         return sb.toString();
     }
 
-    // CLI for user commands
-    private void startCLI() {
-        Scanner scanner = new Scanner(System.in);
-        while (true) {
-            System.out.print("> ");
-            String command = scanner.nextLine().trim();
-            String[] parts = command.split(" ");
+    // Public methods for GUI to call
+    public void connect(String host, int port) {
+        connections.add(new ConnectionHandler(host, port));
+        if (listener != null) {
+            listener.onMessageReceived("Connected to " + host + ":" + port);
+        }
+    }
 
-            if (parts.length == 0) continue;
+    public void search(String keyword) {
+        String command = "search " + keyword;
+        if (connections.isEmpty()) {
+            if (listener != null) {
+                listener.onMessageReceived("No active connections. Use 'connect' first.");
+            }
+            return;
+        }
+        for (ConnectionHandler conn : connections) {
+            conn.sendCommand(command);
+        }
+    }
 
-            switch (parts[0]) {
-                case "connect":
-                    if (parts.length != 3) {
-                        System.out.println("Usage: connect <host> <port>");
-                        continue;
-                    }
-                    String host = parts[1];
-                    int newPort = Integer.parseInt(parts[2]);
-                    connections.add(new ConnectionHandler(host, newPort));
-                    System.out.println("Connected to " + host + ":" + newPort);
-                    break;
-                case "discover":
-                    System.out.println("Discovered peers:");
-                    Set<String> peers = discoveryService.getDiscoveredPeers();
-                    if (peers.isEmpty()) {
-                        System.out.println("No peers found. Waiting for broadcasts...");
-                    } else {
-                        peers.forEach(System.out::println);
-                    }
-                    break;
-                case "search":
-                case "download":
-                    if (connections.isEmpty()) {
-                        System.out.println("No active connections. Use 'discover' or 'connect' first.");
-                        continue;
-                    }
-                    for (ConnectionHandler conn : connections) {
-                        conn.sendCommand(command);
-                    }
-                    break;
-                case "exit":
-                    System.out.println("Exiting...");
-                    discoveryService.shutdown();
-                    scanner.close();
-                    threadPool.shutdownNow();
-                    System.exit(0);
-                    break;
-                default:
-                    System.out.println("Unknown command.");
+    public void download(String fileName) {
+        String command = "download " + fileName;
+        if (connections.isEmpty()) {
+            if (listener != null) {
+                listener.onMessageReceived("No active connections. Use 'connect' first.");
+            }
+            return;
+        }
+        for (ConnectionHandler conn : connections) {
+            conn.sendCommand(command);
+        }
+    }
+
+    public void discoverPeers() {
+        if (listener != null) {
+            listener.onMessageReceived("Discovered peers:");
+            Set<String> peers = discoveryService.getDiscoveredPeers();
+            if (peers.isEmpty()) {
+                listener.onMessageReceived("No peers found. Waiting for broadcasts...");
+            } else {
+                peers.forEach(listener::onMessageReceived);
             }
         }
+    }
+
+    public void shutdown() {
+        discoveryService.shutdown();
+        threadPool.shutdownNow();
     }
 
     // Handles outgoing connections to another peer
@@ -208,12 +226,15 @@ public class Peer {
                 PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
                 
                 if (command.startsWith("search")) {
-                    out.println(command);
+                    out.println(command + " 0"); // Appending offset 0 for initial search
                     BufferedReader in = new BufferedReader(new InputStreamReader(inStream));
-                    System.out.println("[" + host + ":" + port + "] Search results:");
+                    List<String> results = new ArrayList<>();
                     String line;
                     while ((line = in.readLine()) != null && !line.equals("END")) {
-                        System.out.println(" - " + line);
+                        results.add(line);
+                    }
+                    if (listener != null) {
+                        listener.onSearchResults(host, port, results);
                     }
                 } else if (command.startsWith("download")) {
                     String[] parts = command.split(" ");
@@ -224,7 +245,9 @@ public class Peer {
                     long existingSize = 0;
                     if (outFile.exists()) {
                         existingSize = outFile.length();
-                        System.out.println("Resuming download of " + fileName + " from " + existingSize + " bytes.");
+                        if (listener != null) {
+                            listener.onMessageReceived("Resuming download of " + fileName + " from " + existingSize + " bytes.");
+                        }
                     }
                     
                     out.println(command + " " + existingSize);
@@ -234,11 +257,15 @@ public class Peer {
                     long remainingSize = dataIn.readLong();
 
                     if (remainingSize == -1) {
-                        System.out.println("File not found on peer.");
+                        if (listener != null) {
+                            listener.onMessageReceived("File not found on peer.");
+                        }
                         return;
                     }
                     if (remainingSize == 0) {
-                        System.out.println("File already fully downloaded: " + fileName);
+                        if (listener != null) {
+                            listener.onMessageReceived("File already fully downloaded: " + fileName);
+                        }
                         return;
                     }
 
@@ -255,49 +282,45 @@ public class Peer {
                         // Verify checksum after download
                         String localChecksum = getFileChecksum(outFile);
                         if (localChecksum.equals(remoteChecksum)) {
-                            System.out.println("File downloaded successfully: " + fileName);
+                            if (listener != null) {
+                                listener.onMessageReceived("File downloaded successfully: " + fileName);
+                            }
                         } else {
-                            System.err.println("File download failed! Checksum mismatch.");
-                            System.err.println("Local: " + localChecksum);
-                            System.err.println("Remote: " + remoteChecksum);
+                            if (listener != null) {
+                                listener.onMessageReceived("File download failed! Checksum mismatch.");
+                                listener.onMessageReceived("Local: " + localChecksum);
+                                listener.onMessageReceived("Remote: " + remoteChecksum);
+                            }
                         }
                     } catch (NoSuchAlgorithmException e) {
-                        System.err.println("Checksum verification failed: " + e.getMessage());
+                        if (listener != null) {
+                            listener.onMessageReceived("Checksum verification failed: " + e.getMessage());
+                        }
                     }
                 }
             } catch (IOException e) {
-                System.err.println("Connection to " + host + ":" + port + " failed: " + e.getMessage());
-            }
-        }
-
-        private String getFileChecksum(File file) throws IOException, NoSuchAlgorithmException {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            try (FileInputStream fis = new FileInputStream(file)) {
-                byte[] buffer = new byte[BUFFER_SIZE];
-                int bytesRead;
-                while ((bytesRead = fis.read(buffer)) != -1) {
-                    digest.update(buffer, 0, bytesRead);
+                if (listener != null) {
+                    listener.onMessageReceived("Connection to " + host + ":" + port + " failed: " + e.getMessage());
                 }
             }
-            byte[] hashedBytes = digest.digest();
-            StringBuilder sb = new StringBuilder();
-            for (byte b : hashedBytes) {
-                sb.append(String.format("%02x", b));
-            }
-            return sb.toString();
         }
     }
 
-    // Main method
+    // Main method to launch the GUI
     public static void main(String[] args) {
         if (args.length != 1) {
-            System.out.println("Usage: java Peer <port>");
+            System.out.println("Usage: java PeerGUI <port>");
             return;
         }
-        new File(SHARED_DIR).mkdirs();
-        new File(DOWNLOAD_DIR).mkdirs();
 
         int port = Integer.parseInt(args[0]);
-        new Peer(port).start();
+        Peer peer = new Peer(port);
+        SwingUtilities.invokeLater(() -> new PeerGUI(peer, port).setVisible(true));
+        
+        // Setup shutdown hook
+        Runtime.getRuntime().addShutdownHook(new Thread(peer::shutdown));
     }
 }
+
+// PeerDiscoveryService is a new file that must be compiled with Peer.java
+// For this example, we will assume it is available.
