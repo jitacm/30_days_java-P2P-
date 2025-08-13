@@ -1,69 +1,82 @@
 # 📡 Java-P2P: A Peer-to-Peer File Sharer
 
-A **console-based**, decentralized file-sharing application written in **Java**.  
+A **console-based**, decentralized file-sharing application written in **Java**.
 Each instance of the application acts as both a **client** and a **server**, enabling users to search and download files directly from other peers without a central server.
+
+Think of it as your own private file-sharing network, perfect for learning **network programming**, **multithreading**, and **socket communication**.
 
 ---
 
 ## 📖 Table of Contents
 
-1. [Overview](#📜-overview)
-2. [Features](#✨-features)
-3. [Key Terms](#📚-key-terms)
-4. [Prerequisites](#💻-prerequisites)
-5. [Installation](#⚙️-installation)
-6. [Usage Guide](#🖥️-usage-guide)
-7. [Example Workflow](#🛠-example-workflow)
-7. [How It Works](#🔧-how-it-works)
-9. [Project Structure](#📂-project-structure)
-10. [Limitations](#⚠️-limitations)
-11. [License](#📜-license)
+1. [Overview](#-overview)
+2. [Features](#-features)
+3. [Key Terms](#-key-terms)
+4. [Technologies Used](#-technologies-used)
+5. [Prerequisites](#-prerequisites)
+6. [Installation](#-installation)
+7. [Usage Guide](#-usage-guide)
+8. [Example Workflow](#-example-workflow)
+9. [How It Works](#-how-it-works)
+10. [Network Configuration](#-network-configuration)
+11. [Troubleshooting](#-troubleshooting)
+12. [Contributing](#-contributing)
+13. [License](#-license)
+14. [Educational Value](#-educational-value)
 
 ---
 
 ## 📜 Overview
 
-This project demonstrates **network programming in Java** by building a fully functional peer-to-peer (P2P) file sharing system.  
-Unlike centralized file-sharing services, there is **no single server** — every peer can directly connect to others, search for available files, and download them.
+This project demonstrates **network programming in Java** by building a fully functional **peer-to-peer (P2P)** file sharing system.
+Unlike centralized services, there is **no single server** — every peer can connect to others, search for available files, and download them.
 
-The program uses:
+The application uses:
 
-- **Multithreading** to handle multiple simultaneous connections.
-- **Socket programming** for TCP-based communication between peers.
-- **Binary streaming** to send files reliably.
+* **Multithreading** to handle multiple simultaneous connections.
+* **TCP socket programming** for communication.
+* **Binary streaming** for reliable file transfers.
 
 ---
 
 ## ✨ Features
 
-- **Decentralized Architecture** — No central server required; peers communicate directly.
-- **Dual Role Peers** — Each instance acts as both client and server.
-- **Multithreaded Connection Handling** — Thread pool for managing concurrent connections.
-- **File Search** — Search shared directories on connected peers.
-- **Direct File Transfer** — Download files over TCP using a binary data stream.
-- **Simple CLI Interface** — Use text commands to control the peer and manage transfers.
-- **Automatic Folder Setup** — Creates required `shared/` and `downloads/` folders if they don't exist.
+* **Decentralized Architecture** — No central server; all peers are equal.
+* **Dual Role Peers** — Each instance is both client and server.
+* **Multithreaded Connection Handling** — Uses thread pools for efficiency.
+* **File Search** — Find files on connected peers with keyword matching.
+* **Direct File Transfer** — Fast binary transfers over TCP.
+* **Simple CLI Interface** — Intuitive text commands for interaction.
+* **Automatic Folder Setup** — Creates `shared/` and `downloads/` if missing.
 
 ---
 
 ## 📚 Key Terms
 
-- **Peer**: A node in the network that can act as both client and server.
-- **P2P (Peer-to-Peer)**: A network where each participant communicates directly without a central server.
-- **Socket**: An endpoint for sending or receiving data across a network connection.
-- **TCP (Transmission Control Protocol)**: A communication protocol that ensures reliable, ordered delivery of data.
-- **Thread Pool**: A set of pre-instantiated threads ready to handle tasks, improving concurrency and performance.
-- **Binary Stream**: A method of transmitting data as raw bytes, allowing accurate file transfer.
+* **Peer**: A network participant acting as both client and server.
+* **P2P**: Direct communication without a central server.
+* **Socket**: Network endpoint for sending/receiving data.
+* **TCP**: Reliable, ordered communication protocol.
+* **Thread Pool**: Pre-instantiated threads for concurrent tasks.
+* **Binary Stream**: Raw byte transfer for accurate file sharing.
+
+---
+
+## 🛠 Technologies Used
+
+* **Java 11+**
+* **Socket Programming** (TCP)
+* **Multithreading** (ExecutorService)
+* **File I/O Streams**
+* **Command-line Interface Design**
 
 ---
 
 ## 💻 Prerequisites
 
-To compile and run the project, you will need:
-
-- **Java Development Kit (JDK)** version 11 or higher.
-- Basic understanding of command-line operations.
-- (For cross-computer usage) Both systems must be on the same network or have port forwarding enabled.
+* **Java Development Kit (JDK) 11 or higher**
+* Basic CLI knowledge
+* Same network connection or port forwarding for cross-network use
 
 ---
 
@@ -84,8 +97,6 @@ mkdir shared downloads
 
 ### 3. Add a Test File
 
-Place a file inside `shared/`, for example:
-
 ```bash
 echo "Hello, P2P World!" > shared/hello.txt
 ```
@@ -100,9 +111,7 @@ javac Peer.java
 
 ## 🖥️ Usage Guide
 
-### Start a Peer
-
-Run the peer with:
+Run a peer instance:
 
 ```bash
 java Peer <port>
@@ -114,87 +123,90 @@ Example:
 java Peer 9001
 ```
 
-### CLI Commands
+**Commands:**
 
-| Command | Description | Example |
-|---------|-------------|---------|
+| Command                 | Description              | Example                     |
+| ----------------------- | ------------------------ | --------------------------- |
 | `connect <host> <port>` | Connect to another peer. | `connect 192.168.1.10 9001` |
-| `search <keyword>` | Search for files containing `<keyword>` in their name. | `search hello` |
-| `download <filename>` | Download a file from the connected peer. | `download hello.txt` |
-| `exit` | Exit the application. | `exit` |
+| `search <keyword>`      | Search for files.        | `search hello`              |
+| `download <filename>`   | Download a file.         | `download hello.txt`        |
+| `exit`                  | Exit the app.            | `exit`                      |
 
 ---
 
 ## 🛠 Example Workflow
 
-### Running Two Peers Locally
-
-**Terminal 1:**
+**Terminal 1 (Peer 1):**
 
 ```bash
 java Peer 9001
 ```
 
-**Terminal 2:**
+**Terminal 2 (Peer 2):**
 
 ```bash
 java Peer 9002
-```
-
-**In Peer 2 CLI:**
-
-```bash
 connect localhost 9001
 search hello
 download hello.txt
 ```
 
-The file `hello.txt` from Peer 1's `shared/` folder will appear in Peer 2's `downloads/` folder.
+Result: `hello.txt` is downloaded to Peer 2's `downloads/` folder.
 
 ---
 
 ## 🔧 How It Works
 
-### Dual Components
-
-- **Server Thread**: Listens for incoming connections and responds to search or download requests.
-- **Client CLI**: Accepts user commands and communicates with other peers.
-
-### Connecting to a Peer
-
-The `connect` command opens a TCP socket to another peer's listening port.
-
-### Searching for Files
-
-1. The client sends `search <keyword>` to the server.
-2. The server searches its `shared/` folder and returns matching filenames.
-
-### Downloading a File
-
-1. The client sends `download <filename>`.
-2. The server responds with:
-   - File size (long integer).
-   - File content as binary stream.
-3. The client reads exactly that many bytes and saves the file.
-
-### Multithreading
-
-Each incoming connection is handled in its own thread, allowing multiple downloads or searches simultaneously.
+* **Server Thread**: Listens for connections and responds to search/download requests.
+* **Client CLI**: Accepts user commands and sends requests to peers.
+* **Multithreading**: Handles each connection in its own thread.
+* **File Transfer**: Sends file size first, then binary data stream.
 
 ---
 
-## 📂 Project Structure
+## 🌐 Network Configuration
 
-```
-.
-├── Peer.java          # Main application code
-├── shared/            # Folder containing files available to share
-│   └── hello.txt
-└── downloads/         # Folder where downloaded files will be saved
-```
+* **Local Network**: Find IP using `ipconfig` (Windows) or `ifconfig` (macOS/Linux), then connect.
+* **Firewall**: Allow chosen port for Java.
+
+---
+
+## 🔍 Troubleshooting
+
+* **Port in use**: Choose another port.
+* **Connection refused**: Ensure peer is online and port is correct.
+* **File not found**: Verify in `shared/` folder.
+
+---
+
+## 🤝 Contributing
+
+Potential improvements:
+
+* GUI interface
+* File encryption
+* Peer discovery
+* Resume downloads
+* File integrity checks
 
 ---
 
 ## 📜 License
 
-This project is licensed under the MIT License — see the `LICENSE.md` file for details.
+This project is licensed under the MIT License. Feel free to use, modify, and distribute it as you see fit!
+
+## 🎯 Educational Value
+
+This project is perfect for learning:
+- Network programming in Java
+- Socket communication
+- Multithreading and concurrent programming
+- File I/O operations
+- Command-line interface design
+- Peer-to-peer architecture concepts
+
+---
+
+**Happy file sharing! 🎉** 
+
+If you found this project helpful, consider giving it a star ⭐ on GitHub!
