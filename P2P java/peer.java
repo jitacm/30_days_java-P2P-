@@ -1,5 +1,9 @@
 import java.io.*;
 import java.net.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -74,7 +78,7 @@ public class Peer {
         out.println("END");
     }
 
-    // Send a file to the requesting peer, supporting download resume
+    // Send a file to the requesting peer, including a checksum
     private void handleDownload(String command, OutputStream outStream) throws IOException {
         String[] parts = command.split(" ");
         if (parts.length < 3) return;
@@ -89,23 +93,48 @@ public class Peer {
             return;
         }
 
-        long fileSize = file.length();
-        if (offset >= fileSize) {
-            // File already fully downloaded, or offset is invalid
-            dataOut.writeLong(0); // Tell client to not expect any more bytes
-            return;
+        try {
+            // Calculate and send checksum
+            String checksum = getFileChecksum(file);
+            dataOut.writeUTF(checksum);
+
+            long fileSize = file.length();
+            if (offset >= fileSize) {
+                dataOut.writeLong(0);
+                return;
+            }
+
+            dataOut.writeLong(fileSize - offset);
+
+            try (RandomAccessFile fileIn = new RandomAccessFile(file, "r")) {
+                fileIn.seek(offset);
+                byte[] buffer = new byte[BUFFER_SIZE];
+                int bytesRead;
+                while ((bytesRead = fileIn.read(buffer)) != -1) {
+                    dataOut.write(buffer, 0, bytesRead);
+                }
+            }
+        } catch (NoSuchAlgorithmException e) {
+            System.err.println("Checksum algorithm not found: " + e.getMessage());
+            dataOut.writeLong(-1);
         }
+    }
 
-        dataOut.writeLong(fileSize - offset);
-
-        try (RandomAccessFile fileIn = new RandomAccessFile(file, "r")) {
-            fileIn.seek(offset); // Start reading from the specified offset
+    private String getFileChecksum(File file) throws IOException, NoSuchAlgorithmException {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        try (FileInputStream fis = new FileInputStream(file)) {
             byte[] buffer = new byte[BUFFER_SIZE];
             int bytesRead;
-            while ((bytesRead = fileIn.read(buffer)) != -1) {
-                dataOut.write(buffer, 0, bytesRead);
+            while ((bytesRead = fis.read(buffer)) != -1) {
+                digest.update(buffer, 0, bytesRead);
             }
         }
+        byte[] hashedBytes = digest.digest();
+        StringBuilder sb = new StringBuilder();
+        for (byte b : hashedBytes) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
     }
 
     // CLI for user commands
@@ -201,7 +230,9 @@ public class Peer {
                     out.println(command + " " + existingSize);
 
                     DataInputStream dataIn = new DataInputStream(inStream);
+                    String remoteChecksum = dataIn.readUTF();
                     long remainingSize = dataIn.readLong();
+
                     if (remainingSize == -1) {
                         System.out.println("File not found on peer.");
                         return;
@@ -212,7 +243,7 @@ public class Peer {
                     }
 
                     try (RandomAccessFile fileOut = new RandomAccessFile(outFile, "rw")) {
-                        fileOut.seek(existingSize); // Start writing from the end of the existing file
+                        fileOut.seek(existingSize);
                         byte[] buffer = new byte[BUFFER_SIZE];
                         long totalRead = 0;
                         int bytesRead;
@@ -220,12 +251,40 @@ public class Peer {
                             fileOut.write(buffer, 0, bytesRead);
                             totalRead += bytesRead;
                         }
-                        System.out.println("File downloaded: " + fileName);
+                        
+                        // Verify checksum after download
+                        String localChecksum = getFileChecksum(outFile);
+                        if (localChecksum.equals(remoteChecksum)) {
+                            System.out.println("File downloaded successfully: " + fileName);
+                        } else {
+                            System.err.println("File download failed! Checksum mismatch.");
+                            System.err.println("Local: " + localChecksum);
+                            System.err.println("Remote: " + remoteChecksum);
+                        }
+                    } catch (NoSuchAlgorithmException e) {
+                        System.err.println("Checksum verification failed: " + e.getMessage());
                     }
                 }
             } catch (IOException e) {
                 System.err.println("Connection to " + host + ":" + port + " failed: " + e.getMessage());
             }
+        }
+
+        private String getFileChecksum(File file) throws IOException, NoSuchAlgorithmException {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            try (FileInputStream fis = new FileInputStream(file)) {
+                byte[] buffer = new byte[BUFFER_SIZE];
+                int bytesRead;
+                while ((bytesRead = fis.read(buffer)) != -1) {
+                    digest.update(buffer, 0, bytesRead);
+                }
+            }
+            byte[] hashedBytes = digest.digest();
+            StringBuilder sb = new StringBuilder();
+            for (byte b : hashedBytes) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
         }
     }
 
