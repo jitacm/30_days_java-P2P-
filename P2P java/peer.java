@@ -1,10 +1,11 @@
+import javax.net.ssl.*;
 import java.io.*;
 import java.net.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
+import java.security.*;
+import java.security.cert.CertificateException;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -20,12 +21,18 @@ public class Peer {
     private static final int BUFFER_SIZE = 4096;
     private static final String SHARED_DIR = "shared";
     private static final String DOWNLOAD_DIR = "downloads";
+    
+    // Keystore and Truststore for SSL/TLS
+    private static final String KEY_STORE_PATH = "keystore.jks";
+    private static final String TRUST_STORE_PATH = "truststore.jks";
+    private static final String STORE_PASSWORD = "password";
 
     private int port;
     private ExecutorService threadPool = Executors.newFixedThreadPool(10);
     private List<ConnectionHandler> connections = new ArrayList<>();
     private PeerDiscoveryService discoveryService;
     private PeerListener listener;
+    private SSLContext sslContext;
 
     public Peer(int port) {
         this.port = port;
@@ -43,6 +50,12 @@ public class Peer {
         } catch (IOException e) {
             System.err.println("Error creating directories: " + e.getMessage());
         }
+        
+        try {
+            this.sslContext = createSSLContext();
+        } catch (GeneralSecurityException | IOException e) {
+            System.err.println("Failed to create SSL Context: " + e.getMessage());
+        }
     }
 
     public void setPeerListener(PeerListener listener) {
@@ -54,15 +67,41 @@ public class Peer {
         new Thread(this::startServer).start();
     }
     
-    // Server-side: Listen for incoming peer connections
+    // Creates the SSL context for secure communication
+    private SSLContext createSSLContext() throws KeyStoreException, IOException, NoSuchAlgorithmException, CertificateException, UnrecoverableKeyException, KeyManagementException {
+        KeyStore keyStore = KeyStore.getInstance("JKS");
+        try (FileInputStream keyStoreStream = new FileInputStream(KEY_STORE_PATH)) {
+            keyStore.load(keyStoreStream, STORE_PASSWORD.toCharArray());
+        }
+
+        KeyStore trustStore = KeyStore.getInstance("JKS");
+        try (FileInputStream trustStoreStream = new FileInputStream(TRUST_STORE_PATH)) {
+            trustStore.load(trustStoreStream, STORE_PASSWORD.toCharArray());
+        }
+
+        KeyManagerFactory keyManagerFactory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+        keyManagerFactory.init(keyStore, STORE_PASSWORD.toCharArray());
+
+        TrustManagerFactory trustManagerFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        trustManagerFactory.init(trustStore);
+
+        SSLContext context = SSLContext.getInstance("TLS");
+        context.init(keyManagerFactory.getKeyManagers(), trustManagerFactory.getTrustManagers(), null);
+        return context;
+    }
+
+    // Server-side: Listen for incoming peer connections using SSLServerSocket
     private void startServer() {
-        try (ServerSocket serverSocket = new ServerSocket(port)) {
-            if (listener != null) {
-                listener.onMessageReceived("Listening for peers on port " + port + "...");
-            }
-            while (true) {
-                Socket clientSocket = serverSocket.accept();
-                threadPool.execute(() -> handleClient(clientSocket));
+        try {
+            SSLServerSocketFactory ssf = sslContext.getServerSocketFactory();
+            try (SSLServerSocket serverSocket = (SSLServerSocket) ssf.createServerSocket(port)) {
+                if (listener != null) {
+                    listener.onMessageReceived("Listening for peers securely on port " + port + "...");
+                }
+                while (true) {
+                    SSLSocket clientSocket = (SSLSocket) serverSocket.accept();
+                    threadPool.execute(() -> handleClient(clientSocket));
+                }
             }
         } catch (IOException e) {
             if (listener != null) {
@@ -229,92 +268,97 @@ public class Peer {
         }
 
         public void sendCommand(String command) {
-            try (
-                Socket socket = new Socket(host, port);
-                InputStream inStream = socket.getInputStream();
-                OutputStream outStream = socket.getOutputStream();
-            ) {
-                PrintWriter out = new PrintWriter(outStream, true);
-                
-                if (command.startsWith("search")) {
-                    out.println(command);
-                    BufferedReader in = new BufferedReader(new InputStreamReader(inStream));
-                    List<String> results = new ArrayList<>();
-                    String line;
-                    while ((line = in.readLine()) != null && !line.equals("END")) {
-                        results.add(line);
-                    }
-                    if (listener != null) {
-                        listener.onSearchResults(host, port, results);
-                    }
-                } else if (command.startsWith("download")) {
-                    String[] parts = command.split(" ");
-                    if (parts.length < 2) return;
-                    String fileName = parts[1];
-                    Path downloadPath = Paths.get(DOWNLOAD_DIR, fileName);
-
-                    long existingSize = 0;
-                    if (Files.exists(downloadPath)) {
-                        existingSize = Files.size(downloadPath);
-                        if (listener != null) {
-                            listener.onMessageReceived("Resuming download of " + fileName + " from " + existingSize + " bytes.");
-                        }
-                    }
+            try {
+                SSLSocketFactory ssf = sslContext.getSocketFactory();
+                try (SSLSocket socket = (SSLSocket) ssf.createSocket(host, port)) {
+                    socket.startHandshake();
                     
-                    out.println(command + " " + existingSize);
+                    try (
+                        InputStream inStream = socket.getInputStream();
+                        OutputStream outStream = socket.getOutputStream();
+                        PrintWriter out = new PrintWriter(outStream, true);
+                    ) {
+                        if (command.startsWith("search")) {
+                            out.println(command);
+                            BufferedReader in = new BufferedReader(new InputStreamReader(inStream));
+                            List<String> results = new ArrayList<>();
+                            String line;
+                            while ((line = in.readLine()) != null && !line.equals("END")) {
+                                results.add(line);
+                            }
+                            if (listener != null) {
+                                listener.onSearchResults(host, port, results);
+                            }
+                        } else if (command.startsWith("download")) {
+                            String[] parts = command.split(" ");
+                            if (parts.length < 2) return;
+                            String fileName = parts[1];
+                            Path downloadPath = Paths.get(DOWNLOAD_DIR, fileName);
 
-                    DataInputStream dataIn = new DataInputStream(inStream);
-                    String remoteChecksum = dataIn.readUTF();
-                    long remainingSize = dataIn.readLong();
-
-                    if (remainingSize == -1) {
-                        if (listener != null) {
-                            listener.onMessageReceived("File not found on peer.");
-                        }
-                        return;
-                    }
-                    if (remainingSize == 0) {
-                        if (listener != null) {
-                            listener.onMessageReceived("File already fully downloaded: " + fileName);
-                        }
-                        return;
-                    }
-
-                    try (RandomAccessFile fileOut = new RandomAccessFile(downloadPath.toFile(), "rw")) {
-                        fileOut.seek(existingSize);
-                        byte[] buffer = new byte[BUFFER_SIZE];
-                        long totalRead = existingSize;
-                        int bytesRead;
-                        long bytesToRead = remainingSize;
-                        
-                        while (bytesToRead > 0 && (bytesRead = dataIn.read(buffer, 0, (int) Math.min(buffer.length, bytesToRead))) != -1) {
-                            fileOut.write(buffer, 0, bytesRead);
-                            totalRead += bytesRead;
-                            bytesToRead -= bytesRead;
+                            long existingSize = 0;
+                            if (Files.exists(downloadPath)) {
+                                existingSize = Files.size(downloadPath);
+                                if (listener != null) {
+                                    listener.onMessageReceived("Resuming download of " + fileName + " from " + existingSize + " bytes.");
+                                }
+                            }
                             
-                            // Report progress to the GUI
-                            if (listener != null) {
-                                long totalFileSize = existingSize + remainingSize;
-                                listener.onDownloadProgress(fileName, totalFileSize, totalRead);
+                            out.println(command + " " + existingSize);
+
+                            DataInputStream dataIn = new DataInputStream(inStream);
+                            String remoteChecksum = dataIn.readUTF();
+                            long remainingSize = dataIn.readLong();
+
+                            if (remainingSize == -1) {
+                                if (listener != null) {
+                                    listener.onMessageReceived("File not found on peer.");
+                                }
+                                return;
                             }
-                        }
-                        
-                        // Verify checksum after download
-                        String localChecksum = getFileChecksum(downloadPath.toFile());
-                        if (localChecksum.equals(remoteChecksum)) {
-                            if (listener != null) {
-                                listener.onMessageReceived("File downloaded successfully: " + fileName);
+                            if (remainingSize == 0) {
+                                if (listener != null) {
+                                    listener.onMessageReceived("File already fully downloaded: " + fileName);
+                                }
+                                return;
                             }
-                        } else {
-                            if (listener != null) {
-                                listener.onMessageReceived("File download failed! Checksum mismatch.");
-                                listener.onMessageReceived("Local: " + localChecksum);
-                                listener.onMessageReceived("Remote: " + remoteChecksum);
+
+                            try (RandomAccessFile fileOut = new RandomAccessFile(downloadPath.toFile(), "rw")) {
+                                fileOut.seek(existingSize);
+                                byte[] buffer = new byte[BUFFER_SIZE];
+                                long totalRead = existingSize;
+                                int bytesRead;
+                                long bytesToRead = remainingSize;
+                                
+                                while (bytesToRead > 0 && (bytesRead = dataIn.read(buffer, 0, (int) Math.min(buffer.length, bytesToRead))) != -1) {
+                                    fileOut.write(buffer, 0, bytesRead);
+                                    totalRead += bytesRead;
+                                    bytesToRead -= bytesRead;
+                                    
+                                    // Report progress to the GUI
+                                    if (listener != null) {
+                                        long totalFileSize = existingSize + remainingSize;
+                                        listener.onDownloadProgress(fileName, totalFileSize, totalRead);
+                                    }
+                                }
+                                
+                                // Verify checksum after download
+                                String localChecksum = getFileChecksum(downloadPath.toFile());
+                                if (localChecksum.equals(remoteChecksum)) {
+                                    if (listener != null) {
+                                        listener.onMessageReceived("File downloaded successfully: " + fileName);
+                                    }
+                                } else {
+                                    if (listener != null) {
+                                        listener.onMessageReceived("File download failed! Checksum mismatch.");
+                                        listener.onMessageReceived("Local: " + localChecksum);
+                                        listener.onMessageReceived("Remote: " + remoteChecksum);
+                                    }
+                                }
+                            } catch (NoSuchAlgorithmException e) {
+                                if (listener != null) {
+                                    listener.onMessageReceived("Checksum verification failed: " + e.getMessage());
+                                }
                             }
-                        }
-                    } catch (NoSuchAlgorithmException e) {
-                        if (listener != null) {
-                            listener.onMessageReceived("Checksum verification failed: " + e.getMessage());
                         }
                     }
                 }
@@ -323,12 +367,10 @@ public class Peer {
                     listener.onMessageReceived("Connection to " + host + ":" + port + " failed: " + e.getMessage());
                 }
             }
+        } catch (Exception e) {
+            if (listener != null) {
+                listener.onMessageReceived("Connection to " + host + ":" + port + " failed: " + e.getMessage());
+            }
         }
-    }
-
-    // This main method is now redundant and will be removed in favor of PeerGUI's main.
-    // However, for compilation purposes, it is kept as a placeholder.
-    public static void main(String[] args) {
-        System.err.println("Please run the application using 'java PeerGUI <port>'.");
     }
 }

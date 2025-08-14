@@ -158,7 +158,6 @@ public class PeerGUI extends JFrame implements Peer.PeerListener {
 
             SwingUtilities.invokeLater(() -> {
                 PeerGUI gui = new PeerGUI(peer, port);
-                // Set the listener and then start the peer
                 peer.setPeerListener(gui);
                 peer.start();
                 gui.setVisible(true);
