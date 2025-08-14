@@ -326,22 +326,9 @@ public class Peer {
         }
     }
 
-    // Main method to launch the GUI
+    // This main method is now redundant and will be removed in favor of PeerGUI's main.
+    // However, for compilation purposes, it is kept as a placeholder.
     public static void main(String[] args) {
-        if (args.length != 1) {
-            System.out.println("Usage: java PeerGUI <port>");
-            return;
-        }
-
-        int port = Integer.parseInt(args[0]);
-        Peer peer = new Peer(port);
-        SwingUtilities.invokeLater(() -> {
-            PeerGUI gui = new PeerGUI(peer, port);
-            peer.setPeerListener(gui);
-            gui.setVisible(true);
-        });
-        
-        // Setup shutdown hook
-        Runtime.getRuntime().addShutdownHook(new Thread(peer::shutdown));
+        System.err.println("Please run the application using 'java PeerGUI <port>'.");
     }
 }
