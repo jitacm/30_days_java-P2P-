@@ -19,8 +19,6 @@ public class PeerGUI extends JFrame implements Peer.PeerListener {
 
     public PeerGUI(Peer peer, int port) {
         this.peer = peer;
-        this.peer.setPeerListener(this);
-        this.peer.start();
 
         setTitle("P2P File Sharer - Port " + port);
         setSize(800, 600);
@@ -127,7 +125,6 @@ public class PeerGUI extends JFrame implements Peer.PeerListener {
     @Override
     public void onSearchResults(String host, int port, List<String> results) {
         SwingUtilities.invokeLater(() -> {
-            // Clear existing results and add new ones
             searchResultsModel.clear();
             if (results.isEmpty()) {
                 onMessageReceived("No files found on " + host + ":" + port);
@@ -155,14 +152,23 @@ public class PeerGUI extends JFrame implements Peer.PeerListener {
             return;
         }
 
-        int port = Integer.parseInt(args[0]);
-        Peer peer = new Peer(port);
-        SwingUtilities.invokeLater(() -> {
-            PeerGUI gui = new PeerGUI(peer, port);
-            peer.setPeerListener(gui);
-            gui.setVisible(true);
-        });
-        
-        Runtime.getRuntime().addShutdownHook(new Thread(peer::shutdown));
+        try {
+            int port = Integer.parseInt(args[0]);
+            Peer peer = new Peer(port);
+
+            SwingUtilities.invokeLater(() -> {
+                PeerGUI gui = new PeerGUI(peer, port);
+                // Set the listener and then start the peer
+                peer.setPeerListener(gui);
+                peer.start();
+                gui.setVisible(true);
+            });
+
+            // Setup shutdown hook
+            Runtime.getRuntime().addShutdownHook(new Thread(peer::shutdown));
+
+        } catch (NumberFormatException e) {
+            System.err.println("Error: The port number must be an integer.");
+        }
     }
 }
